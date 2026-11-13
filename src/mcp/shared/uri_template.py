@@ -1051,6 +1051,31 @@ def _scan_suffix(
     return result, pos
 
 
+def _ifemp_prefix_value_is_empty(uri: str, pos: int, limit: int, literal: str, stops: str) -> bool:
+    """Return whether a ``;`` capture at ``pos`` is the empty ifemp form.
+
+    RFC 6570 §3.2.7 emits ``;name`` for an empty value and ``;name=value``
+    otherwise. A following literal that starts with ``=`` shares a prefix
+    with the non-empty form when the value begins with that literal's
+    stem (``;name`` + ``=end`` versus ``;name=`` + ``end`` + ``=end``).
+    The empty reading applies only when no non-empty reading finds the
+    literal inside the value's stop window.
+    """
+    if not uri.startswith(literal, pos):
+        return False
+    if not literal.startswith("="):
+        return True
+    value_start = pos + 1
+    latest = value_start
+    while latest < limit and uri[latest] not in stops:
+        latest += 1
+    found = uri.find(literal, value_start, latest + len(literal))
+    # No second hit: the '=' at pos is the literal and the value is empty.
+    # A hit at value_start is an empty value after an explicit '=', which
+    # `;` expansion never emits.
+    return found <= value_start
+
+
 def _scan_prefix(
     atoms: Sequence[_Atom], uri: str, start: int, limit: int
 ) -> tuple[dict[str, str | list[str]], int] | None:
@@ -1082,10 +1107,7 @@ def _scan_prefix(
             # RFC §3.2.7 ifemp: ;name=val for non-empty, bare ;name for
             # empty. Decide which form is present without falling through
             # to the stop-char scan when the value is empty.
-            if uri.startswith(nxt.text, pos):
-                # Following literal begins immediately: value is empty.
-                # Checked before '=' so a literal that itself starts
-                # with '=' is not mistaken for the ifemp separator.
+            if _ifemp_prefix_value_is_empty(uri, pos, limit, nxt.text, stops):
                 result[var.name] = ""
                 continue
             if pos < limit and uri[pos] == "=":

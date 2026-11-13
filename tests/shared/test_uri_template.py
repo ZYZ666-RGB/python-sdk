@@ -747,6 +747,65 @@ def test_match_prefix_ifemp_empty_before_non_stop_literal():
     assert t.match("api;keyZX/tail") is None
 
 
+@pytest.mark.parametrize(
+    ("template", "variables"),
+    [
+        # Value equals the stem of a following literal that starts with '='.
+        ("{;a}=end{+rest}", {"a": "end", "rest": "/x"}),
+        ("{;a}=end{+rest}", {"a": "end", "rest": ""}),
+        ("{;a}=end{+rest}/tail", {"a": "end", "rest": "/x"}),
+        ("pre{;a}=end{+rest}", {"a": "end", "rest": "z"}),
+        # Value is longer than that stem, so the URI still begins with the literal.
+        ("{;a}=end{+rest}", {"a": "endX", "rest": "/x"}),
+        # '=' inside the value is percent-encoded and must decode back.
+        ("{;a}=end{+rest}", {"a": "end=end", "rest": "/x"}),
+        # The following literal is only '='. Every non-empty value begins with it.
+        ("{;a}={+rest}", {"a": "x", "rest": "/y"}),
+        # Empty values stay empty when the literal is not repeated after a separator.
+        ("{;a}=end{+rest}", {"a": "", "rest": "/x"}),
+        ("{;a}=end{+rest}/tail", {"a": "", "rest": "/x"}),
+        ("{;a}={+rest}", {"a": "", "rest": "/y"}),
+        # Empty value, literal '=', and a greedy tail that itself starts with '='.
+        ("{;a}={+rest}", {"a": "", "rest": "=/y"}),
+        ("{;a}={+rest}/tail", {"a": "", "rest": ""}),
+        # Same collision in front of an explode capture, which used to fail closed.
+        ("{;a}=end{/path*}", {"a": "end", "path": ["x"]}),
+        ("{;a}=end{/path*}", {"a": "", "path": ["x"]}),
+        ("{;a}=end{.labels*}", {"a": "end", "labels": ["x"]}),
+        ("{;a}=end{;keys*}", {"a": "end", "keys": ["x"]}),
+        # A later path-style parameter has the same shape.
+        ("{;a}=end{;b}=z{+rest}", {"a": "end", "b": "z", "rest": "/x"}),
+        ("{;a}=end{;b}=z{+rest}", {"a": "end", "b": "", "rest": "/x"}),
+        # No greedy variable: the suffix scan already round-trips this shape.
+        ("/api{;mode}=fast{/id}", {"mode": "fast", "id": "1"}),
+        ("/api{;mode}=fast{/id}", {"mode": "", "id": "1"}),
+    ],
+)
+def test_match_roundtrips_path_param_before_equals_literal(
+    template: str, variables: dict[str, str | list[str]]
+) -> None:
+    """Path-style ``{;var}`` round-trips when the next literal starts with ``=``.
+
+    Regression for the prefix ifemp check treating that value as empty
+    (RFC 6570 §3.2.7). SDK-defined inverse of ``expand``.
+    """
+    parsed = UriTemplate.parse(template)
+    assert parsed.match(parsed.expand(variables)) == variables
+
+
+def test_match_prefers_nonempty_path_param_when_equals_literal_is_repeated() -> None:
+    """An ambiguous ``{;var}`` expansion matches the non-empty path parameter.
+
+    ``{;a}=end{+rest}`` expands both an empty ``a`` with ``rest="=end/x"`` and
+    ``a="end"`` with ``rest="/x"`` to one URI; matching keeps the non-empty
+    parameter. SDK-defined.
+    """
+    parsed = UriTemplate.parse("{;a}=end{+rest}")
+    uri = parsed.expand({"a": "", "rest": "=end/x"})
+    assert uri == ";a=end=end/x"
+    assert parsed.match(uri) == {"a": "end", "rest": "/x"}
+
+
 def test_match_large_uri_against_greedy_template():
     # Large payload against a greedy template — the scan visits each
     # character once for the suffix anchor and once for the greedy
